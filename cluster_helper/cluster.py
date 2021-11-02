@@ -22,8 +22,9 @@ import sys
 import six
 
 from ipyparallel import Client
-from ipyparallel.apps import launcher
-from ipyparallel.apps.launcher import LocalControllerLauncher
+from ipyparallel.cluster import launcher
+from ipyparallel.cluster.launcher import LocalControllerLauncher
+
 from ipyparallel import error as iperror
 from IPython.paths import locate_profile, get_ipython_dir
 import traitlets
@@ -54,10 +55,10 @@ import json
 import socket
 import stat
 import netifaces
-from ipyparallel.apps.ipcontrollerapp import IPControllerApp
+from ipyparallel.cluster.launcher import ControllerLauncher
 from IPython.utils.data import uniq_stable
 
-class VMFixIPControllerApp(IPControllerApp):
+class VMFixIPControllerApp(ControllerLauncher):
     def _get_public_ip(self):
         """Avoid picking up docker and VM network interfaces in IPython 2.0.
 
@@ -124,16 +125,13 @@ resource_cmds = ["import resource",
                  "target_hdls = min(max_hdls, %s) if max_hdls > 0 else %s" % (target_procs, target_procs),
                  "resource.setrlimit(resource.RLIMIT_NOFILE, (max(cur_hdls, target_hdls), max_hdls))"]
 
-start_cmd = "from ipyparallel.apps.%s import launch_new_instance"
 engine_cmd_argv = [sys.executable, "-E", "-c"] + \
-                  ["; ".join(resource_cmds + [start_cmd % "ipengineapp", "launch_new_instance()"])]
+                  ["; ".join(resource_cmds + ["from ipyrallel.cluster.launcher import EngineLauncher", "EngineLauncher()"])]
 cluster_cmd_argv = [sys.executable, "-E", "-c"] + \
-                   ["; ".join(resource_cmds + [start_cmd % "ipclusterapp", "launch_new_instance()"])]
-#controller_cmd_argv = [sys.executable, "-E", "-c"] + \
-#                      ["; ".join(resource_cmds + [start_cmd % "ipcontrollerapp", "launch_new_instance()"])]
+                   ["; ".join(resource_cmds + ["from ipyparallel import Cluster", "Cluster()"])]
 controller_cmd_argv = [sys.executable, "-E", "-c"] + \
                       ["; ".join(resource_cmds + ["from cluster_helper.cluster import VMFixIPControllerApp",
-                                                  "VMFixIPControllerApp.launch_instance()"])]
+                                                  "VMFixIPControllerApp.ControllerLauncher()"])]
 
 def get_engine_commands(context, n):
     """Retrieve potentially multiple engines running in a single submit script.
@@ -440,7 +438,7 @@ class SLURMLauncher(launcher.BatchSystemLauncher):
     queue_template = Unicode('#SBATCH -p {queue}')
 
 
-class BcbioSLURMEngineSetLauncher(SLURMLauncher, launcher.BatchClusterAppMixin):
+class BcbioSLURMEngineSetLauncher(SLURMLauncher, launcher.SlurmEngineSetLauncher):
     """Custom launcher handling heterogeneous clusters on SLURM
     """
     batch_file_name = Unicode("SLURM_engine" + str(uuid.uuid4()))
@@ -480,7 +478,7 @@ class BcbioSLURMEngineSetLauncher(SLURMLauncher, launcher.BatchClusterAppMixin):
         self.context["cmd"] = get_engine_commands(self.context, self.numengines)
         return super(BcbioSLURMEngineSetLauncher, self).start(n)
 
-class BcbioSLURMControllerLauncher(SLURMLauncher, launcher.BatchClusterAppMixin):
+class BcbioSLURMControllerLauncher(SLURMLauncher, launcher.SlurmControllerLauncher):
     batch_file_name = Unicode("SLURM_controller" + str(uuid.uuid4()))
     account = traitlets.Unicode("", config=True)
     cores = traitlets.Integer(1, config=True)
@@ -512,10 +510,10 @@ export IPYTHONDIR={profile_dir}
         self.context["resources"] = "\n".join(["#SBATCH --%s\n" % r.strip()
                                                for r in str(self.resources).split(";")
                                                if r.strip()])
-        return super(BcbioSLURMControllerLauncher, self).start(1)
+        return super(BcbioSLURMControllerLauncher, self).start()
 
 
-class BcbioOLDSLURMEngineSetLauncher(SLURMLauncher, launcher.BatchClusterAppMixin):
+class BcbioOLDSLURMEngineSetLauncher(SLURMLauncher, launcher.SlurmEngineSetLauncher):
     """Launch engines using SLURM for version < 2.6"""
     machines = traitlets.Integer(1, config=True)
     account = traitlets.Unicode("", config=True)
@@ -541,7 +539,7 @@ srun -N {machines} -n {n} %s %s --profile-dir="{profile_dir}" --cluster-id="{clu
         return super(BcbioOLDSLURMEngineSetLauncher, self).start(n)
 
 
-class BcbioOLDSLURMControllerLauncher(SLURMLauncher, launcher.BatchClusterAppMixin):
+class BcbioOLDSLURMControllerLauncher(SLURMLauncher, launcher.SlurmControllerLauncher):
     """Launch a controller using SLURM for versions < 2.6"""
     account = traitlets.Unicode("", config=True)
     timelimit = traitlets.Unicode("", config=True)
@@ -564,6 +562,7 @@ export IPYTHONDIR={profile_dir}
         return super(BcbioOLDSLURMControllerLauncher, self).start(1)
 
 # ## Torque
+# not directly supported as of ipyparallel 7.29.0 - use PBS
 class TORQUELauncher(launcher.BatchSystemLauncher):
     """A BatchSystemLauncher subclass for Torque"""
 
@@ -602,7 +601,7 @@ def _prep_torque_resources(resources):
         out.append("#PBS -l walltime=239:00:00")
     return out
 
-class BcbioTORQUEEngineSetLauncher(TORQUELauncher, launcher.BatchClusterAppMixin):
+class BcbioTORQUEEngineSetLauncher(TORQUELauncher, launcher.PBSEngineSetLauncher):
     """Launch Engines using Torque"""
     cores = traitlets.Integer(1, config=True)
     mem = traitlets.Unicode("", config=True)
@@ -642,7 +641,7 @@ cd $PBS_O_WORKDIR
         except:
             self.log.exception("Engine start failed")
 
-class BcbioTORQUEControllerLauncher(TORQUELauncher, launcher.BatchClusterAppMixin):
+class BcbioTORQUEControllerLauncher(TORQUELauncher, launcher.PBSControllerLauncher):
     """Launch a controller using Torque."""
     batch_file_name = Unicode("torque_controller" + str(uuid.uuid4()),
                               config=True, help="batch file name for the engine(s) job.")
@@ -692,7 +691,7 @@ class PBSPROLauncher(launcher.PBSLauncher):
         self.job_id = data
         return data
 
-class BcbioPBSPROEngineSetLauncher(PBSPROLauncher, launcher.BatchClusterAppMixin):
+class BcbioPBSPROEngineSetLauncher(PBSPROLauncher, launcher.PBSEngineSetLauncher):
     """Launch Engines using PBSPro"""
 
     batch_file_name = Unicode('pbspro_engines' + str(uuid.uuid4()),
@@ -745,7 +744,7 @@ cd $PBS_O_WORKDIR
         return job_id
 
 
-class BcbioPBSPROControllerLauncher(PBSPROLauncher, launcher.BatchClusterAppMixin):
+class BcbioPBSPROControllerLauncher(PBSPROLauncher, launcher.PBSControllerLauncher):
     """Launch a controller using PBSPro."""
 
     batch_file_name = Unicode("pbspro_controller" + str(uuid.uuid4()),

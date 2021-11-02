@@ -1,3 +1,6 @@
+## 0.7.0 (2 November 2021)
+- update to python3/iparallel7
+
 ## 0.6.4 (24 September 2019)
 - python3 fixes for PBSPro schedulers. 
 
